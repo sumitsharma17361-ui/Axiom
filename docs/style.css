@@ -35,7 +35,10 @@ body{
     var(--bg);
 }
 .screen{position:fixed;inset:0;display:none;flex-direction:column;}
-.screen.active{display:flex;}
+.screen.active{display:flex !important;}
+#authScreen.active{display:flex !important;}
+#chatScreen.active{display:flex !important;}
+#authScreen:not(.active), #chatScreen:not(.active) { display: none !important; }
 
 /* ============ AUTH ============ */
 #authScreen{
