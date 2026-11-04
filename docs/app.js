@@ -1,28 +1,32 @@
 /* ============================================================
-   AXIOM FRONTEND v1.1 (Bulletproof Auth)
+   AXIOM FRONTEND v2.0 (JARVIS Live Voice Mode)
    ============================================================ */
 
 // ★★★ AAPKA RENDER URL ★★★
 const API = 'https://axiom-xh42.onrender.com';
 
-// ============ STATE ============
 let token = localStorage.getItem('axiom_token') || null;
 let user = JSON.parse(localStorage.getItem('axiom_user') || 'null');
 let isRegisterMode = false;
-let voiceOutputEnabled = localStorage.getItem('axiom_voice') === '1';
+
+// Voice Variables
 let recognition = null;
 let isListening = false;
+let isSpeaking = false;
+let liveModeActive = false;
 
-// ============ DOM ============
 const $ = (id) => document.getElementById(id);
 
 // ============ INIT ============
 window.addEventListener('DOMContentLoaded', () => {
-  if (token && user) enterApp();
-  updateVoiceBtn();
+  if (token && user) {
+    showStartScreen();
+  } else {
+    $('authScreen').classList.add('active');
+  }
 });
 
-// ============ AUTH LOGIC ============
+// ============ AUTH ============
 function toggleMode() {
   isRegisterMode = !isRegisterMode;
   $('nameGroup').style.display = isRegisterMode ? 'block' : 'none';
@@ -36,16 +40,13 @@ async function submitAuth() {
   const password = $('password').value;
   const name = $('name').value.trim();
   
-  // Validation
   if (!email || !password) return showAuthError('Email and password required');
   if (password.length < 6) return showAuthError('Password must be 6+ characters');
   if (isRegisterMode && !name) return showAuthError('Please enter your name');
 
-  // API Endpoint set karo mode ke hisaab se
   const endpoint = isRegisterMode ? '/api/auth/register' : '/api/auth/login';
-
   $('primaryBtn').disabled = true;
-  $('primaryBtn').textContent = isRegisterMode ? 'Creating…' : 'Signing in…';
+  $('primaryBtn').textContent = 'Please wait...';
 
   try {
     const res = await fetch(API + endpoint, {
@@ -53,16 +54,17 @@ async function submitAuth() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password, name })
     });
-    
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to authenticate');
+    if (!res.ok) throw new Error(data.error || 'Failed');
     
-    // Success
     token = data.token;
     user = data.user;
     localStorage.setItem('axiom_token', token);
     localStorage.setItem('axiom_user', JSON.stringify(user));
-    enterApp();
+    
+    // Go to Start Screen
+    $('authScreen').classList.remove('active');
+    showStartScreen();
     
   } catch (e) {
     showAuthError(e.message);
@@ -79,117 +81,193 @@ function showAuthError(msg) {
   setTimeout(() => el.classList.remove('show'), 4000);
 }
 
-function logout() {
-  localStorage.removeItem('axiom_token');
-  localStorage.removeItem('axiom_user');
-  token = null; user = null;
-  location.reload();
-}
-
-// ============ ENTER APP ============
-function enterApp() {
+// ============ START SCREEN & GREETING ============
+function showStartScreen() {
   $('authScreen').classList.remove('active');
+  $('chatScreen').classList.remove('active');
+  $('startScreen').classList.add('active');
+  
+  // Time-based Greeting Text
+  const hour = new Date().getHours();
+  let greet = 'Hello';
+  if (hour < 12) greet = 'Good morning';
+  else if (hour < 18) greet = 'Good afternoon';
+  else greet = 'Good evening';
+  
+  const userName = user.name ? user.name.split(' ')[0] : 'Sumit';
+  $('startGreeting').textContent = `${greet}, ${userName}. Tap below to start.`;
+}
+
+function startLiveMode() {
+  $('startScreen').classList.remove('active');
   $('chatScreen').classList.add('active');
-  $('welcomeName').textContent = user.name?.split(' ')[0] || 'friend';
-  $('menuName').textContent = user.name || 'User';
-  $('menuEmail').textContent = user.email || '';
-  $('menuAvatar').textContent = (user.name || 'U')[0].toUpperCase();
-  loadHistory();
+  
+  // Initial Greeting from AI
+  const hour = new Date().getHours();
+  let greet = 'Hello';
+  if (hour < 12) greet = 'Good morning';
+  else if (hour < 18) greet = 'Good afternoon';
+  else greet = 'Good evening';
+  
+  const userName = user.name ? user.name.split(' ')[0] : 'Sumit';
+  const welcomeMsg = `${greet} ${userName}. How can I help you today?`;
+  
+  appendMessage('bot', welcomeMsg);
+  liveModeActive = true;
+  
+  // AI will speak first, then start listening
+  speakText(welcomeMsg, () => {
+    startListening();
+  });
 }
 
-// ============ HISTORY ============
-async function loadHistory() {
-  try {
-    const res = await fetch(API + '/api/history', {
-      headers: { 'Authorization': 'Bearer ' + token }
-    });
-    if (res.status === 401) return logout();
-    const msgs = await res.json();
-    if (!msgs.length) return;
-    $('messages').innerHTML = '';
-    msgs.forEach(m => appendMessage(m.role === 'user' ? 'user' : 'bot', m.content));
-    scrollBottom();
-  } catch (e) { /* ignore */ }
+function stopLiveMode() {
+  liveModeActive = false;
+  stopRecognition();
+  window.speechSynthesis.cancel();
+  showStartScreen();
 }
 
-async function clearChat() {
-  if (!confirm('Clear entire conversation?')) return;
-  closeMenu();
-  try {
-    await fetch(API + '/api/history', {
-      method: 'DELETE',
-      headers: { 'Authorization': 'Bearer ' + token }
-    });
-    location.reload();
-  } catch (e) { toast('Failed to clear', 'error'); }
+// ============ VOICE RECOGNITION (STT) ============
+function startListening() {
+  if (!liveModeActive) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return toast('Voice not supported on this browser', 'error');
+
+  if (isListening || isSpeaking) return;
+
+  recognition = new SR();
+  recognition.lang = 'en-IN';
+  recognition.continuous = false;
+  recognition.interimResults = false;
+
+  recognition.onstart = () => {
+    isListening = true;
+    $('voiceVisualizer').classList.add('active');
+    $('statusText').textContent = 'Listening...';
+  };
+
+  recognition.onresult = (e) => {
+    const transcript = e.results[0][0].transcript;
+    if (transcript.trim()) {
+      $('input').value = transcript;
+      handleManualText();
+    }
+  };
+
+  recognition.onerror = (e) => {
+    if (e.error !== 'aborted' && e.error !== 'no-speech') {
+      $('statusText').textContent = 'Mic error. Please allow mic permissions.';
+    }
+  };
+
+  recognition.onend = () => {
+    isListening = false;
+    $('voiceVisualizer').classList.remove('active');
+    if (liveModeActive && !isSpeaking) {
+       $('statusText').textContent = 'Tap mic to speak...';
+    }
+  };
+
+  try { recognition.start(); } catch (e) { console.error(e); }
 }
 
-// ============ SEND MESSAGE ============
-async function sendMessage(textOverride) {
-  const input = $('input');
-  const message = (textOverride || input.value).trim();
-  if (!message) return;
-  if (!textOverride) { input.value = ''; autosize(input); }
+function stopRecognition() {
+  isListening = false;
+  $('voiceVisualizer').classList.remove('active');
+  if (recognition) { try { recognition.stop(); } catch(e) {} recognition = null; }
+}
 
-  const welcome = $('messages').querySelector('.welcome');
-  if (welcome) welcome.remove();
+// ============ VOICE SYNTHESIS (TTS) ============
+function speakText(text, callback) {
+  if (!('speechSynthesis' in window)) {
+    if (callback) callback();
+    return;
+  }
+  
+  stopRecognition(); // Stop listening while speaking
+  window.speechSynthesis.cancel();
+  
+  const cleanText = text.replace(/[*`#]/g, '').replace(/\n+/g, '. ');
+  const u = new SpeechSynthesisUtterance(cleanText);
+  u.lang = 'en-IN';
+  u.rate = 1.05;
+  u.pitch = 1.0;
+  
+  isSpeaking = true;
+  $('statusText').textContent = 'Speaking...';
+  $('voiceVisualizer').classList.add('active');
+  
+  u.onend = () => {
+    isSpeaking = false;
+    $('voiceVisualizer').classList.remove('active');
+    if (callback) callback(); // Start listening again
+  };
+  
+  window.speechSynthesis.speak(u);
+}
 
-  appendMessage('user', message);
-  scrollBottom();
-  const typingEl = showTyping();
-  $('sendBtn').disabled = true;
-
+// ============ CHAT LOGIC ============
+async function handleManualText() {
+  const text = $('input').value.trim();
+  if (!text) return;
+  $('input').value = '';
+  
+  appendMessage('user', text);
+  $('statusText').textContent = 'Thinking...';
+  
   try {
     const res = await fetch(API + '/api/chat', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + token
-      },
-      body: JSON.stringify({ message })
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ message: text })
     });
-    if (res.status === 401) { logout(); return; }
-    const data = await res.json();
-    typingEl.remove();
-    if (!res.ok) throw new Error(data.error || 'AI failed to respond');
     
-    appendMessage('bot', data.reply, data.toolUsed);
-    scrollBottom();
-    if (voiceOutputEnabled) speak(data.reply);
+    if (res.status === 401) {
+      localStorage.clear();
+      location.reload();
+      return;
+    }
+    
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed');
+    
+    appendMessage('bot', data.reply);
+    
+    // Auto-speak AI reply, then start listening again
+    if (liveModeActive) {
+      speakText(data.reply, () => {
+        // Add a small delay before listening to avoid hearing its own voice
+        setTimeout(startListening, 500);
+      });
+    }
+    
   } catch (e) {
-    typingEl.remove();
-    appendMessage('bot', '⚠️ ' + (e.message || 'Something went wrong. Please try again.'));
-    scrollBottom();
-  } finally {
-    $('sendBtn').disabled = false;
+    appendMessage('bot', '⚠️ ' + e.message);
+    if (liveModeActive) setTimeout(startListening, 1000);
   }
 }
 
-function quickAsk(q) {
-  sendMessage(q);
+function handleKey(e) {
+  if (e.key === 'Enter') handleManualText();
 }
 
-// ============ MESSAGE RENDER ============
-function appendMessage(role, text, toolUsed = null) {
+function appendMessage(role, text) {
   const container = $('messages');
   const div = document.createElement('div');
   div.className = 'msg ' + role;
+  
   const time = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
   const formatted = role === 'bot' ? formatMarkdown(text) : escapeHtml(text);
-  const toolBadge = toolUsed ? `<span style="background:rgba(56, 189, 248, 0.2);color:#38bdf8;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;">🔧 ${toolUsed}</span>` : '';
+  
   div.innerHTML = `
     <div class="bubble">${formatted}</div>
-    <div class="meta">${toolBadge} ${time}</div>
+    <div class="meta">${time}</div>
   `;
   container.appendChild(div);
-}
-
-function showTyping() {
-  const div = document.createElement('div');
-  div.className = 'msg bot';
-  div.innerHTML = `<div class="typing"><span></span><span></span><span></span></div>`;
-  $('messages').appendChild(div);
-  return div;
+  
+  // Scroll to bottom
+  requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
 }
 
 function formatMarkdown(text) {
@@ -206,152 +284,6 @@ function escapeHtml(t) {
   return d.innerHTML;
 }
 
-function scrollBottom() {
-  const m = $('messages');
-  requestAnimationFrame(() => { m.scrollTop = m.scrollHeight; });
-}
-
-// ============ INPUT HANDLING ============
-function handleKey(e) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendMessage();
-  }
-}
-
-function autosize(el) {
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-}
-
-// ============ VOICE INPUT (STT) ============
-function toggleMic() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) return toast('Voice input not supported in this browser', 'error');
-
-  if (isListening) { stopRecognition(); return; }
-
-  recognition = new SR();
-  recognition.lang = 'en-IN';
-  recognition.continuous = false;
-  recognition.interimResults = true;
-
-  recognition.onstart = () => {
-    isListening = true;
-    $('micBtn').classList.add('active');
-    $('listeningBar').classList.remove('hidden');
-  };
-
-  recognition.onresult = (e) => {
-    let transcript = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      transcript += e.results[i][0].transcript;
-    }
-    $('input').value = transcript;
-    autosize($('input'));
-  };
-
-  recognition.onerror = (e) => {
-    if (e.error !== 'aborted' && e.error !== 'no-speech') {
-      toast('Mic error: ' + e.error, 'error');
-    }
-    stopRecognition();
-  };
-
-  recognition.onend = () => {
-    stopRecognition();
-    if ($('input').value.trim()) sendMessage();
-  };
-
-  try { recognition.start(); } catch (e) { toast('Failed to start mic', 'error'); }
-}
-
-function stopRecognition() {
-  isListening = false;
-  $('micBtn').classList.remove('active');
-  $('listeningBar').classList.add('hidden');
-  if (recognition) { try { recognition.stop(); } catch(e) {} recognition = null; }
-}
-
-// ============ VOICE OUTPUT (TTS) ============
-function toggleVoiceOutput() {
-  voiceOutputEnabled = !voiceOutputEnabled;
-  localStorage.setItem('axiom_voice', voiceOutputEnabled ? '1' : '0');
-  updateVoiceBtn();
-  toast(voiceOutputEnabled ? 'Voice output ON' : 'Voice output OFF', 'success');
-}
-
-function updateVoiceBtn() {
-  const b = $('voiceOutBtn');
-  if (!b) return;
-  b.classList.toggle('active', voiceOutputEnabled);
-  b.textContent = voiceOutputEnabled ? '🔊' : '🔇';
-}
-
-function speak(text) {
-  if (!('speechSynthesis' in window)) return;
-  window.speechSynthesis.cancel();
-  const clean = text.replace(/[*`#]/g, '').replace(/\n+/g, '. ');
-  const u = new SpeechSynthesisUtterance(clean.slice(0, 500));
-  u.lang = 'en-IN';
-  u.rate = 1.05;
-  u.pitch = 1.0;
-  window.speechSynthesis.speak(u);
-}
-
-// ============ MENU ============
-function openMenu() {
-  $('menuDrawer').classList.add('open');
-  $('menuBackdrop').classList.add('show');
-}
-function closeMenu() {
-  $('menuDrawer').classList.remove('open');
-  $('menuBackdrop').classList.remove('show');
-}
-
-// ============ MEMORIES ============
-async function showMemories() {
-  closeMenu();
-  $('memoryModal').classList.add('open');
-  $('memoryList').innerHTML = '<div class="empty">Loading…</div>';
-  try {
-    const res = await fetch(API + '/api/memory', {
-      headers: { 'Authorization': 'Bearer ' + token }
-    });
-    const mems = await res.json();
-    if (!mems.length) {
-      $('memoryList').innerHTML = '<div class="empty">No memories yet. Tell AXIOM something about yourself, like "Remember my birthday is 15 August".</div>';
-      return;
-    }
-    $('memoryList').innerHTML = mems.map(m => `
-      <div class="memory-item">
-        <div>
-          <div class="m-key">${escapeHtml(m.key)}</div>
-          <div class="m-val">${escapeHtml(m.value)}</div>
-        </div>
-        <button class="m-del" onclick="deleteMemory('${m._id}')">✕</button>
-      </div>
-    `).join('');
-  } catch (e) {
-    $('memoryList').innerHTML = '<div class="empty">Failed to load</div>';
-  }
-}
-
-async function deleteMemory(id) {
-  try {
-    await fetch(API + '/api/memory/' + id, {
-      method: 'DELETE',
-      headers: { 'Authorization': 'Bearer ' + token }
-    });
-    showMemories();
-  } catch (e) {}
-}
-
-function closeMemories() {
-  $('memoryModal').classList.remove('open');
-}
-
-// ============ TOAST ============
 function toast(msg, type = '') {
   const t = $('toast');
   t.textContent = msg;
