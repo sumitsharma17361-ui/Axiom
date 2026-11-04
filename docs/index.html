@@ -4,8 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#050914">
-<title>AXIOM | Voice Assistant</title>
-<link rel="manifest" href="manifest.json">
+<title>AXIOM | Pro Chat</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -13,13 +12,13 @@
 <div class="bg-glow glow-1"></div>
 <div class="bg-glow glow-2"></div>
 
-<!-- AUTH -->
+<!-- AUTH SCREEN -->
 <div id="authScreen" class="screen active">
   <div class="auth-card glass-panel">
     <div class="logo-wrap">
       <div class="logo-mark">A</div>
       <h1 class="logo-text">AXIOM</h1>
-      <p class="tagline">Your personal intelligence</p>
+      <p class="tagline">Pro AI Assistant</p>
     </div>
     <div id="authError" class="auth-error"></div>
     <div class="input-group"><label>Email</label><input type="email" id="email" placeholder="you@example.com"></div>
@@ -30,39 +29,44 @@
   </div>
 </div>
 
-<!-- START SCREEN -->
-<div id="startScreen" class="screen">
-  <div class="start-container">
-    <div class="orb-container"><div class="orb-core"></div><div class="orb-ring"></div></div>
-    <h1 class="start-title">AXIOM</h1>
-    <p class="start-subtitle" id="startGreeting">Ready.</p>
-    <button class="btn start-btn" onclick="startLiveMode()">Tap to Start</button>
-  </div>
-</div>
-
-<!-- CHAT / LIVE SCREEN -->
+<!-- CHAT SCREEN -->
 <div id="chatScreen" class="screen">
   <header class="topbar glass-panel">
-    <div class="brand"><div class="brand-dot"></div><span>AXIOM LIVE</span></div>
-    <div class="top-actions"><button class="icon-btn" onclick="stopLiveMode()" title="Stop">✕</button></div>
+    <div class="brand">
+      <div class="brand-dot"></div>
+      <span>AXIOM</span>
+    </div>
+    <!-- PROVIDER TOGGLE -->
+    <div class="provider-toggle">
+      <button id="toggleGroq" class="active" onclick="setProvider('groq')">⚡ Groq</button>
+      <button id="toggleGemini" onclick="setProvider('gemini')">🧠 Gemini</button>
+    </div>
+    <button class="icon-btn logout-btn" onclick="logout()" title="Logout">✕</button>
   </header>
 
   <main id="messages" class="messages"></main>
 
-  <!-- Voice Visualizer -->
-  <div class="visualizer" id="voiceVisualizer">
-    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
-    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
-  </div>
-
-  <footer class="composer glass-panel" style="flex-direction: column; gap: 10px; padding: 16px;">
-    <div id="statusText" style="text-align: center; font-size: 13px; font-weight: bold; color: var(--accent);">Wait...</div>
+  <footer class="composer glass-panel">
+    <div class="input-wrapper">
+      <!-- FILE UPLOAD -->
+      <input type="file" id="fileInput" accept="*/*" style="display: none;" onchange="handleFile(event)">
+      <button class="icon-btn" onclick="document.getElementById('fileInput').click()" title="Attach File">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+      </button>
+      
+      <textarea id="input" placeholder="Message AXIOM..." rows="1" onkeydown="handleKey(event)" oninput="autosize(this)"></textarea>
+    </div>
     
-    <!-- Bada Mic Button -->
-    <button id="micButton" onclick="toggleMic()" style="width: 70px; height: 70px; border-radius: 50%; background: var(--accent-gradient); border: none; display: flex; align-items: center; justify-content: center; margin: 0 auto; box-shadow: 0 0 20px var(--accent-glow); cursor: pointer;">
-      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" style="width: 30px; height: 30px;"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+    <button class="send-btn" onclick="handleSend()" aria-label="Send">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
     </button>
   </footer>
+  
+  <!-- FILE PREVIEW -->
+  <div id="filePreview" class="file-preview hidden">
+    <span id="fileName">file.pdf</span>
+    <button onclick="clearFile()">✕</button>
+  </div>
 </div>
 
 <div id="toast" class="toast"></div>
