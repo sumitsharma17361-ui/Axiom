@@ -1,6 +1,5 @@
 /* ============================================================
-   AXIOM BACKEND v1.0
-   Express + MongoDB + Groq/Gemini + Tools + Memory
+   AXIOM BACKEND v1.2 — Stable AI Fallback
    ============================================================ */
 
 const express = require('express');
@@ -21,8 +20,6 @@ const MONGO_URI = process.env.MONGO_URI;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me';
 const GROQ_KEYS = [process.env.GROQ_API_KEY, process.env.GROQ_API_KEY_2, process.env.GROQ_API_KEY_3].filter(k => k && k.length > 5);
 const GEMINI_KEYS = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2].filter(k => k && k.length > 5);
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
-const GEMINI_MODEL = 'gemini-2.0-flash';
 
 if (!MONGO_URI) { console.error('❌ MONGO_URI missing'); process.exit(1); }
 if (!GROQ_KEYS.length && !GEMINI_KEYS.length) console.warn('⚠️ No AI keys — chat will fail');
@@ -103,51 +100,80 @@ app.get('/api/me', auth, async (req, res) => {
   res.json(user);
 });
 
-// ============ AI PROVIDERS ============
-async function callGroq(messages, key) {
+// ============================================================
+//  AI PROVIDERS (FIXED)
+// ============================================================
+
+// 1. Groq Call
+async function callGroq(messages, key, model = 'llama-3.3-70b-versatile') {
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-    body: JSON.stringify({ model: GROQ_MODEL, messages, max_tokens: 1500, temperature: 0.7 })
+    body: JSON.stringify({ model, messages, max_tokens: 1500, temperature: 0.7 })
   });
-  if (!res.ok) { const t = await res.text(); throw new Error(`Groq ${res.status}: ${t.slice(0, 200)}`); }
+  if (!res.ok) { const t = await res.text(); throw new Error(`Groq ${res.status}: ${t.slice(0, 100)}`); }
   const data = await res.json();
   const text = data.choices?.[0]?.message?.content?.trim();
   if (!text) throw new Error('Empty Groq response');
   return text;
 }
 
-async function callGemini(messages, key) {
+// 2. Gemini Call
+async function callGemini(messages, key, model = 'gemini-1.5-flash') {
   const system = messages.find(m => m.role === 'system');
   const contents = messages.filter(m => m.role !== 'system').map(m => ({
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: m.content }]
   }));
+  
   const body = { contents, generationConfig: { temperature: 0.7, maxOutputTokens: 1500 } };
   if (system) body.systemInstruction = { parts: [{ text: system.content }] };
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`, {
+  
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
-  if (!res.ok) { const t = await res.text(); throw new Error(`Gemini ${res.status}: ${t.slice(0, 200)}`); }
+  
+  if (!res.ok) { const t = await res.text(); throw new Error(`Gemini ${res.status}: ${t.slice(0, 100)}`); }
   const data = await res.json();
   const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('').trim();
   if (!text) throw new Error('Empty Gemini response');
   return text;
 }
 
+// 3. Master Caller (Groq -> Groq Fallback -> Gemini -> Gemini Fallback)
 async function callAI(messages) {
   let lastErr = null;
-  for (const key of GROQ_KEYS) {
-    try { return { reply: await callGroq(messages, key), provider: 'groq' }; }
-    catch (e) { lastErr = e; console.warn('Groq key failed:', e.message.slice(0, 80)); }
+  
+  // Try Groq Models
+  const groqModels = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
+  for (const model of groqModels) {
+    for (const key of GROQ_KEYS) {
+      try { 
+        return { reply: await callGroq(messages, key, model), provider: 'groq' }; 
+      } catch (e) { 
+        lastErr = e; 
+        console.warn(`Groq [${model}] failed: ${e.message.slice(0, 60)}...`); 
+      }
+    }
   }
-  for (const key of GEMINI_KEYS) {
-    try { return { reply: await callGemini(messages, key), provider: 'gemini' }; }
-    catch (e) { lastErr = e; console.warn('Gemini key failed:', e.message.slice(0, 80)); }
+  
+  // Try Gemini Models
+  const geminiModels = ['gemini-1.5-flash', 'gemini-1.5-pro'];
+  for (const model of geminiModels) {
+    for (const key of GEMINI_KEYS) {
+      try { 
+        return { reply: await callGemini(messages, key, model), provider: 'gemini' }; 
+      } catch (e) { 
+        lastErr = e; 
+        console.warn(`Gemini [${model}] failed: ${e.message.slice(0, 60)}...`); 
+      }
+    }
   }
-  throw lastErr || new Error('All AI providers failed');
+  
+  throw lastErr || new Error('All AI providers failed. Please try again later.');
 }
 
 // ============ TOOLS ============
@@ -176,7 +202,6 @@ async function getWeather(city) {
 function calc(expr) {
   try {
     if (!/^[\d\s+\-*/().%]+$/.test(expr)) return 'Invalid expression';
-    // eslint-disable-next-line no-new-func
     const r = Function('"use strict"; return (' + expr + ')')();
     return String(r);
   } catch (e) { return 'Calc error: ' + e.message; }
@@ -297,7 +322,7 @@ app.get('/health', (req, res) => res.json({
   status: 'ok',
   ai: { groq: GROQ_KEYS.length, gemini: GEMINI_KEYS.length },
   db: mongoose.connection.readyState === 1 ? 'connected' : 'down',
-  version: '1.0.0'
+  version: '1.2.0'
 }));
 
 // ============ LISTEN ============
