@@ -3,19 +3,24 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<meta name="theme-color" content="#0a0e1a">
+<meta name="theme-color" content="#050914">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="mobile-web-app-capable" content="yes">
-<title>AXIOM</title>
+<title>AXIOM | Personal Intelligence</title>
 <link rel="manifest" href="manifest.json">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
+<!-- BACKGROUND GLOW EFFECTS -->
+<div class="bg-glow glow-1"></div>
+<div class="bg-glow glow-2"></div>
+<div class="bg-glow glow-3"></div>
+
 <!-- ============ AUTH SCREEN ============ -->
 <div id="authScreen" class="screen active">
-  <div class="auth-card">
+  <div class="auth-card glass-panel">
     <div class="logo-wrap">
       <div class="logo-mark">A</div>
       <h1 class="logo-text">AXIOM</h1>
@@ -37,14 +42,14 @@
       <input type="password" id="password" placeholder="Min 6 characters" autocomplete="current-password">
     </div>
 
-    <button id="primaryBtn" class="btn primary" onclick="login()">Sign In</button>
+    <button id="primaryBtn" class="btn primary glass-btn" onclick="login()">Sign In</button>
     <button id="secondaryBtn" class="btn ghost" onclick="toggleMode()">New here? Create account</button>
   </div>
 </div>
 
 <!-- ============ CHAT SCREEN ============ -->
 <div id="chatScreen" class="screen">
-  <header class="topbar">
+  <header class="topbar glass-panel">
     <div class="brand">
       <div class="brand-dot"></div>
       <span>AXIOM</span>
@@ -59,7 +64,7 @@
     <div class="welcome">
       <div class="welcome-icon">◈</div>
       <h2>Good to see you, <span id="welcomeName">User</span></h2>
-      <p>Ask me anything. I can search, calculate, check weather, remember facts.</p>
+      <p>I am AXIOM. I can browse the web, calculate, check weather, and remember your details.</p>
       <div class="suggestions">
         <button onclick="quickAsk('What is the weather in Delhi?')">🌤 Weather</button>
         <button onclick="quickAsk('Remember my birthday is 15 August 2004')">🧠 Remember</button>
@@ -76,9 +81,9 @@
     <span>Listening…</span>
   </div>
 
-  <footer class="composer">
+  <footer class="composer glass-panel">
     <button id="micBtn" class="icon-btn mic" onclick="toggleMic()" title="Voice input">🎤</button>
-    <textarea id="input" placeholder="Message AXIOM…" rows="1" onkeydown="handleKey(event)" oninput="autosize(this)"></textarea>
+    <textarea id="input" placeholder="Message AXIOM..." rows="1" onkeydown="handleKey(event)" oninput="autosize(this)"></textarea>
     <button id="sendBtn" class="send-btn" onclick="sendMessage()" aria-label="Send">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <path d="M22 2L11 13"/>
@@ -89,7 +94,7 @@
 </div>
 
 <!-- ============ MENU DRAWER ============ -->
-<div id="menuDrawer" class="menu-drawer">
+<div id="menuDrawer" class="menu-drawer glass-panel">
   <div class="menu-head">
     <div class="menu-avatar" id="menuAvatar">U</div>
     <div>
@@ -100,13 +105,13 @@
   <button class="menu-item" onclick="showMemories()">🧠 Memories</button>
   <button class="menu-item" onclick="clearChat()">🗑 Clear conversation</button>
   <button class="menu-item danger" onclick="logout()">🚪 Sign out</button>
-  <div class="menu-footer">AXIOM v1.0 · Built by you</div>
+  <div class="menu-footer">AXIOM v1.0 · Glass UI</div>
 </div>
 <div id="menuBackdrop" class="backdrop" onclick="closeMenu()"></div>
 
 <!-- ============ MEMORIES MODAL ============ -->
 <div id="memoryModal" class="modal-backdrop">
-  <div class="modal">
+  <div class="modal glass-panel">
     <div class="modal-head">
       <h3>🧠 Memories</h3>
       <button class="icon-btn" onclick="closeMemories()">✕</button>
