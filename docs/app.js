@@ -35,8 +35,17 @@ function toggleMode() {
   $('authError').classList.remove('show');
 }
 
-async function login() { await doAuth('/api/auth/login'); }
-async function register() { await doAuth('/api/auth/register'); }
+async function login() {
+  // Agar user Signup mode mein hai, toh register function call karo
+  if (isRegisterMode) {
+    await doAuth('/api/auth/register');
+  } else {
+    await doAuth('/api/auth/login');
+  }
+}
+function register() {
+  doAuth('/api/auth/register');
+}
 
 async function doAuth(endpoint) {
   const email = $('email').value.trim();
