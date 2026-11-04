@@ -1,12 +1,9 @@
 /* ============================================================
-   AXIOM FRONTEND v1.0
+   AXIOM FRONTEND v1.1 (Bulletproof Auth)
    ============================================================ */
 
-// ★★★ CHANGE THIS TO YOUR RENDER URL ★★★
+// ★★★ AAPKA RENDER URL ★★★
 const API = 'https://axiom-xh42.onrender.com';
-// After deploying to Render, your URL will look like:
-// https://axiom-backend-abc123.onrender.com
-// Replace above with the real URL.
 
 // ============ STATE ============
 let token = localStorage.getItem('axiom_token') || null;
@@ -23,10 +20,9 @@ const $ = (id) => document.getElementById(id);
 window.addEventListener('DOMContentLoaded', () => {
   if (token && user) enterApp();
   updateVoiceBtn();
-  $('input').focus?.();
 });
 
-// ============ AUTH ============
+// ============ AUTH LOGIC ============
 function toggleMode() {
   isRegisterMode = !isRegisterMode;
   $('nameGroup').style.display = isRegisterMode ? 'block' : 'none';
@@ -35,28 +31,21 @@ function toggleMode() {
   $('authError').classList.remove('show');
 }
 
-async function login() {
-  // Agar user Signup mode mein hai, toh register function call karo
-  if (isRegisterMode) {
-    await doAuth('/api/auth/register');
-  } else {
-    await doAuth('/api/auth/login');
-  }
-}
-function register() {
-  doAuth('/api/auth/register');
-}
-
-async function doAuth(endpoint) {
+async function submitAuth() {
   const email = $('email').value.trim();
   const password = $('password').value;
   const name = $('name').value.trim();
+  
+  // Validation
   if (!email || !password) return showAuthError('Email and password required');
   if (password.length < 6) return showAuthError('Password must be 6+ characters');
-  if (endpoint.endsWith('register') && !name) return showAuthError('Please enter your name');
+  if (isRegisterMode && !name) return showAuthError('Please enter your name');
+
+  // API Endpoint set karo mode ke hisaab se
+  const endpoint = isRegisterMode ? '/api/auth/register' : '/api/auth/login';
 
   $('primaryBtn').disabled = true;
-  $('primaryBtn').textContent = endpoint.endsWith('register') ? 'Creating…' : 'Signing in…';
+  $('primaryBtn').textContent = isRegisterMode ? 'Creating…' : 'Signing in…';
 
   try {
     const res = await fetch(API + endpoint, {
@@ -64,13 +53,17 @@ async function doAuth(endpoint) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password, name })
     });
+    
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed');
+    if (!res.ok) throw new Error(data.error || 'Failed to authenticate');
+    
+    // Success
     token = data.token;
     user = data.user;
     localStorage.setItem('axiom_token', token);
     localStorage.setItem('axiom_user', JSON.stringify(user));
     enterApp();
+    
   } catch (e) {
     showAuthError(e.message);
   } finally {
@@ -138,7 +131,6 @@ async function sendMessage(textOverride) {
   if (!message) return;
   if (!textOverride) { input.value = ''; autosize(input); }
 
-  // Remove welcome
   const welcome = $('messages').querySelector('.welcome');
   if (welcome) welcome.remove();
 
@@ -159,7 +151,8 @@ async function sendMessage(textOverride) {
     if (res.status === 401) { logout(); return; }
     const data = await res.json();
     typingEl.remove();
-    if (!res.ok) throw new Error(data.error || 'AI failed');
+    if (!res.ok) throw new Error(data.error || 'AI failed to respond');
+    
     appendMessage('bot', data.reply, data.toolUsed);
     scrollBottom();
     if (voiceOutputEnabled) speak(data.reply);
@@ -183,7 +176,7 @@ function appendMessage(role, text, toolUsed = null) {
   div.className = 'msg ' + role;
   const time = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
   const formatted = role === 'bot' ? formatMarkdown(text) : escapeHtml(text);
-  const toolBadge = toolUsed ? `<span style="background:rgba(91,143,255,.2);color:#93b8ff;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;">🔧 ${toolUsed}</span>` : '';
+  const toolBadge = toolUsed ? `<span style="background:rgba(56, 189, 248, 0.2);color:#38bdf8;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;">🔧 ${toolUsed}</span>` : '';
   div.innerHTML = `
     <div class="bubble">${formatted}</div>
     <div class="meta">${toolBadge} ${time}</div>
@@ -298,7 +291,6 @@ function updateVoiceBtn() {
 function speak(text) {
   if (!('speechSynthesis' in window)) return;
   window.speechSynthesis.cancel();
-  // Strip markdown for cleaner speech
   const clean = text.replace(/[*`#]/g, '').replace(/\n+/g, '. ');
   const u = new SpeechSynthesisUtterance(clean.slice(0, 500));
   u.lang = 'en-IN';
