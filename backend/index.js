@@ -1,5 +1,5 @@
 /* ============================================================
-   AXIOM BACKEND v2.0 (Multi-Provider + Multimodal Files)
+   AXIOM BACKEND v3.0 (Robust Multi-Provider + Fallbacks)
    ============================================================ */
 
 const express = require('express');
@@ -7,11 +7,10 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
-const rateLimit = require('express-rate-limit');
 
 const app = express();
 app.set('trust proxy', 1);
-app.use(express.json({ limit: '50mb' })); // Increased limit for file uploads
+app.use(express.json({ limit: '50mb' }));
 app.use(cors());
 
 // ============ ENV ============
@@ -19,13 +18,18 @@ const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 const JWT_SECRET = process.env.JWT_SECRET || 'axiom_secret_key_123';
 
-const GROQ_API_KEYS = [process.env.GROQ_API_KEY, process.env.GROQ_API_KEY_2, process.env.GROQ_API_KEY_3].filter(k => k && k.trim() && k.trim().length > 5).map(k => k.trim());
-const GEMINI_API_KEYS = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2, process.env.GEMINI_API_KEY_3].filter(k => k && k.trim() && k.trim().length > 5).map(k => k.trim());
+// Multi-Key Support
+const GROQ_API_KEYS = [process.env.GROQ_API_KEY, process.env.GROQ_API_KEY_2, process.env.GROQ_API_KEY_3].filter(k => k && k.trim().length > 5);
+const GEMINI_API_KEYS = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2, process.env.GEMINI_API_KEY_3].filter(k => k && k.trim().length > 5);
 
-const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
-const GROQ_FALLBACK_MODELS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-20b'];
+// Model Config & Fallbacks
+const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+const GROQ_FALLBACK_MODELS = ['llama-3.1-8b-instant', 'openai/gpt-oss-20b'];
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash-latest';
 const GEMINI_FALLBACK_MODELS = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash-exp'];
+
+let groqKeyIndex = 0;
+let geminiKeyIndex = 0;
 
 if (!MONGO_URI) { console.error('❌ MONGO_URI missing'); process.exit(1); }
 
@@ -45,7 +49,7 @@ const Message = mongoose.model('Message', new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
   role: { type: String, enum: ['user', 'assistant'], required: true },
   content: { type: String, required: true },
-  fileName: { type: String, default: null }, // To show file icon in chat
+  fileName: { type: String, default: null },
   createdAt: { type: Date, default: Date.now }
 }));
 
@@ -67,54 +71,151 @@ function auth(req, res, next) {
   } catch (e) { return res.status(401).json({ error: 'Invalid token' }); }
 }
 
-// ============ AI PROVIDERS ============
-async function callGroq(prompt, systemPrompt, history) {
-  if (GROQ_API_KEYS.length === 0) throw new Error('No Groq API key');
-  const key = GROQ_API_KEYS[0]; // Simplified for this version
+// ============ ROBUST AI PROVIDERS ============
+function getNextGroqKey() {
+  if (GROQ_API_KEYS.length === 0) return null;
+  const key = GROQ_API_KEYS[groqKeyIndex % GROQ_API_KEYS.length];
+  groqKeyIndex++;
+  return key;
+}
+
+function getNextGeminiKey() {
+  if (GEMINI_API_KEYS.length === 0) return null;
+  const key = GEMINI_API_KEYS[geminiKeyIndex % GEMINI_API_KEYS.length];
+  geminiKeyIndex++;
+  return key;
+}
+
+async function callGroqOnce({ prompt, systemPrompt, history, timeoutMs = 45000, model, apiKey }) {
   const messages = [];
   if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
   if (history) messages.push(...history);
   messages.push({ role: 'user', content: prompt });
 
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-    body: JSON.stringify({ model: GROQ_MODEL, messages, max_tokens: 2000 })
-  });
-  if (!res.ok) throw new Error(`Groq Error: ${res.statusText}`);
-  const data = await res.json();
-  return data.choices[0].message.content;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({ model, messages, max_tokens: 2000, temperature: 0.7 }),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`Groq Error: ${res.status}`);
+    const data = await res.json();
+    return data.choices[0].message.content;
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
+  }
 }
 
-async function callGemini(prompt, systemPrompt, history, fileBase64, mimeType) {
-  if (GEMINI_API_KEYS.length === 0) throw new Error('No Gemini API key');
-  const key = GEMINI_API_KEYS[0];
-  
+async function callGroq(args) {
+  if (GROQ_API_KEYS.length === 0) throw new Error('No Groq API key');
+  const modelsToTry = [args.model || GROQ_MODEL, ...GROQ_FALLBACK_MODELS];
+  let lastError = null;
+
+  for (const model of modelsToTry) {
+    const apiKey = getNextGroqKey();
+    if (!apiKey) break;
+    try {
+      return await callGroqOnce({ ...args, model, apiKey });
+    } catch (err) {
+      lastError = err;
+      console.warn(`⚠️ Groq model ${model} failed, trying next...`);
+    }
+  }
+  throw lastError || new Error('All Groq models failed');
+}
+
+async function callGeminiOnce({ prompt, systemPrompt, history, fileBase64, mimeType, timeoutMs = 60000, model, apiKey }) {
   const contents = [];
   if (history) {
-    // Convert standard history to Gemini format
     for (const msg of history) {
       contents.push({ role: msg.role === 'assistant' ? 'model' : 'user', parts: [{ text: msg.content }] });
     }
   }
-
   const userParts = [{ text: prompt }];
   if (fileBase64 && mimeType) {
     userParts.push({ inline_data: { mime_type: mimeType, data: fileBase64 } });
   }
   contents.push({ role: 'user', parts: userParts });
 
-  const payload = { contents };
+  const payload = { contents, generationConfig: { temperature: 0.7, maxOutputTokens: 2000 } };
   if (systemPrompt) payload.systemInstruction = { parts: [{ text: systemPrompt }] };
 
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) { const err = await res.text(); throw new Error(`Gemini Error: ${err}`); }
-  const data = await res.json();
-  return data.candidates[0].content.parts[0].text;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Gemini Error ${res.status}: ${errText}`);
+    }
+    const data = await res.json();
+    return data.candidates[0].content.parts[0].text;
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
+  }
+}
+
+async function callGemini(args) {
+  if (GEMINI_API_KEYS.length === 0) throw new Error('No Gemini API key');
+  const modelsToTry = [args.model || GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS];
+  let lastError = null;
+
+  for (const model of modelsToTry) {
+    for (let i = 0; i < GEMINI_API_KEYS.length; i++) {
+      const apiKey = getNextGeminiKey();
+      if (!apiKey) break;
+      try {
+        return await callGeminiOnce({ ...args, model, apiKey });
+      } catch (err) {
+        lastError = err;
+        console.warn(`⚠️ Gemini model ${model} failed, trying next...`);
+      }
+    }
+  }
+  throw lastError || new Error('All Gemini models failed');
+}
+
+// Unified AI Caller
+async function callAI(args) {
+  const TOTAL_TIMEOUT = 90000;
+  const startTime = Date.now();
+  let groqError = null;
+
+  // 1. Try Groq First (if no file is attached)
+  if (!args.fileBase64 && GROQ_API_KEYS.length > 0) {
+    try {
+      const reply = await callGroq({ ...args, timeoutMs: 45000 });
+      return { reply, provider: 'groq' };
+    } catch (err) {
+      groqError = err;
+    }
+  }
+
+  // 2. Fallback to Gemini
+  const remainingTime = TOTAL_TIMEOUT - (Date.now() - startTime);
+  if (remainingTime <= 0) throw new Error('AI request timed out.');
+
+  try {
+    const reply = await callGemini({ ...args, timeoutMs: remainingTime });
+    return { reply, provider: 'gemini' };
+  } catch (geminiError) {
+    throw new Error(`Both AI providers failed. Groq: ${groqError?.message || 'Skipped'} | Gemini: ${geminiError.message}`);
+  }
 }
 
 // ============ ROUTES ============
@@ -151,46 +252,49 @@ app.post('/api/chat', auth, async (req, res) => {
 
     const history = recent.map(m => ({ role: m.role, content: m.content }));
     
-    // Save user message first
     await Message.create({ userId: req.userId, role: 'user', content: message || 'Uploaded a file', fileName });
 
     let reply = '';
     
-    // If file is present, force Gemini (as Groq doesn't read files)
-    const useGemini = !!fileBase64 || provider === 'gemini';
+    // Use the robust callAI wrapper
+    const aiResult = await callAI({
+      prompt: message,
+      systemPrompt,
+      history,
+      fileBase64,
+      mimeType
+    });
 
-    try {
-      if (useGemini) {
-        reply = await callGemini(message, systemPrompt, history, fileBase64, mimeType);
-      } else {
-        reply = await callGroq(message, systemPrompt, history);
-      }
-    } catch (err) {
-      // Fallback
-      reply = await callGemini(message, systemPrompt, history, fileBase64, mimeType);
-    }
+    reply = aiResult.reply;
 
-    // Simple memory extraction logic
+    // Memory extraction
     try {
       const match = reply.match(/\{"tool":"remember".*?\}/);
       if (match) {
         const parsed = JSON.parse(match[0]);
         await Memory.create({ userId: req.userId, key: parsed.key, value: parsed.value });
-        reply = reply.replace(match[0], '').trim(); // remove JSON from reply
+        reply = reply.replace(match[0], '').trim(); 
         if (!reply) reply = "Got it. I'll remember that.";
       }
     } catch (e) {}
 
     await Message.create({ userId: req.userId, role: 'assistant', content: reply });
-    res.json({ reply });
+    res.json({ reply, provider: aiResult.provider });
 
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { 
+    console.error("Chat Error:", e.message);
+    res.status(500).json({ error: e.message }); 
+  }
 });
 
 app.get('/api/history', auth, async (req, res) => {
-  const msgs = await Message.find({ userId: req.userId }).sort({ createdAt: 1 }).lean();
-  res.json(msgs);
+  try {
+    const msgs = await Message.find({ userId: req.userId }).sort({ createdAt: 1 }).lean();
+    res.json(msgs);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get('/health', (req, res) => res.json({ status: 'ok', groqKeys: GROQ_API_KEYS.length, geminiKeys: GEMINI_API_KEYS.length }));
 app.get('/', (req, res) => res.send('AXIOM ONLINE'));
-app.listen(PORT, () => console.log(`🚀 AXIOM on ${PORT}`));
+
+app.listen(PORT, () => console.log(`🚀 AXIOM v3.0 running on ${PORT}`));
